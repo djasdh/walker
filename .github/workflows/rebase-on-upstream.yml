@@ -1,0 +1,42 @@
+name: Rebase on Upstream
+
+on:
+  schedule:
+    - cron: '0 3 * * 0'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  rebase:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: master
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/abenz1267/walker.git
+          git fetch upstream master
+      - name: Rebase local changes onto upstream
+        run: |
+          git rebase upstream/master
+      - name: Push
+        run: |
+          git push origin master
+      - name: Open issue on conflict
+        if: ${{ failure() }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: 'Rebase conflict: manual resolution needed',
+              body: 'The automatic rebase onto upstream failed. Resolve conflicts locally and push manually.',
+            })
