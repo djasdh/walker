@@ -1,4 +1,7 @@
 use std::cell::RefCell;
+use std::env;
+use std::fs;
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use crate::config::get_config;
@@ -66,22 +69,23 @@ struct BlurContext {
     compositor: WlCompositor,
     bg_effect: ExtBackgroundEffectSurfaceV1,
     last_rect: Option<(i32, i32, i32, i32)>,
+    radius: i32,
     last_radius: i32,
 }
 
 impl BlurContext {
-    fn update_region(&mut self, rect: (i32, i32, i32, i32), radius: i32) {
-        if self.last_rect == Some(rect) && self.last_radius == radius {
+    fn update_region(&mut self, rect: (i32, i32, i32, i32)) {
+        if self.last_rect == Some(rect) && self.last_radius == self.radius {
             return;
         }
         self.last_rect = Some(rect);
-        self.last_radius = radius;
+        self.last_radius = self.radius;
 
         let region = self.compositor.create_region(&self.qh, ());
         let (x, y, w, h) = rect;
         let w = w.max(0);
         let h = h.max(0);
-        let r = radius.clamp(0, w / 2).clamp(0, h / 2);
+        let r = self.radius.clamp(0, w / 2).clamp(0, h / 2);
 
         if r <= 0 {
             region.add(x, y, w, h);
@@ -104,6 +108,33 @@ impl BlurContext {
 
         let _ = self.queue.flush();
     }
+}
+
+fn read_theme_border_radius() -> Option<i32> {
+    let theme = &get_config().theme;
+    let home = env::var("HOME").ok()?;
+    let path = PathBuf::from(&home)
+        .join(".config/walker/themes")
+        .join(theme)
+        .join("style.css");
+    let css = fs::read_to_string(path).ok()?;
+    parse_border_radius(&css)
+}
+
+fn parse_border_radius(css: &str) -> Option<i32> {
+    let start = css.find(".box-wrapper")?;
+    let brace = css[start..].find('{')? + start;
+    let close = css[brace + 1..].find('}')? + brace + 1;
+    let block = &css[brace..close];
+    let br = block.find("border-radius")?;
+    let after = &block[br + "border-radius".len()..];
+    let colon = after.find(':')?;
+    let value: String = after[colon + 1..]
+        .chars()
+        .skip_while(|c| c.is_whitespace())
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    value.parse::<i32>().ok()
 }
 
 impl Drop for BlurContext {
@@ -134,15 +165,12 @@ pub fn attach_blur(window: &Window, target: &GtkBox) {
                     if let Some(c) = ctx.borrow_mut().as_mut()
                         && let Some(bounds) = target.compute_bounds(&window)
                     {
-                        c.update_region(
-                            (
-                                bounds.x() as i32,
-                                bounds.y() as i32,
-                                bounds.width() as i32,
-                                bounds.height() as i32,
-                            ),
-                            get_config().blur_corner_radius,
-                        );
+                        c.update_region((
+                            bounds.x() as i32,
+                            bounds.y() as i32,
+                            bounds.width() as i32,
+                            bounds.height() as i32,
+                        ));
                     }
                 });
             }
@@ -202,12 +230,15 @@ fn init_context(window: &Window) -> Result<BlurContext, String> {
 
     let _ = connection.flush();
 
+    let radius = read_theme_border_radius().unwrap_or_else(|| get_config().blur_corner_radius);
+
     Ok(BlurContext {
         queue,
         qh,
         compositor,
         bg_effect,
         last_rect: None,
+        radius,
         last_radius: 0,
     })
 }

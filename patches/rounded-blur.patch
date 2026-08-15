@@ -1,3 +1,54 @@
+diff --git a/.github/workflows/rebase-on-upstream.yml b/.github/workflows/rebase-on-upstream.yml
+new file mode 100644
+index 0000000..afd861b
+--- /dev/null
++++ b/.github/workflows/rebase-on-upstream.yml
+@@ -0,0 +1,42 @@
++name: Rebase on Upstream
++
++on:
++  schedule:
++    - cron: '0 3 * * 0'
++  workflow_dispatch:
++
++permissions:
++  contents: write
++  issues: write
++
++jobs:
++  rebase:
++    runs-on: ubuntu-latest
++    steps:
++      - name: Checkout fork
++        uses: actions/checkout@v4
++        with:
++          fetch-depth: 0
++          token: ${{ secrets.GITHUB_TOKEN }}
++          ref: master
++      - name: Fetch upstream
++        run: |
++          git remote add upstream https://github.com/abenz1267/walker.git
++          git fetch upstream master
++      - name: Rebase local changes onto upstream
++        run: |
++          git rebase upstream/master
++      - name: Push
++        run: |
++          git push origin master
++      - name: Open issue on conflict
++        if: ${{ failure() }}
++        uses: actions/github-script@v7
++        with:
++          script: |
++            github.rest.issues.create({
++              owner: context.repo.owner,
++              repo: context.repo.repo,
++              title: 'Rebase conflict: manual resolution needed',
++              body: 'The automatic rebase onto upstream failed. Resolve conflicts locally and push manually.',
++            })
+diff --git a/patches/rounded-blur.patch b/patches/rounded-blur.patch
+new file mode 100644
+index 0000000..e69de29
 diff --git a/resources/config.toml b/resources/config.toml
 index 2166592..ccedf0e 100644
 --- a/resources/config.toml
@@ -42,40 +93,43 @@ index d7cacf7..a00d55d 100644
              self.providers.merge(p);
          }
 diff --git a/src/wayland_blur.rs b/src/wayland_blur.rs
-index 360b188..eb975e9 100644
+index 360b188..8dc75f4 100644
 --- a/src/wayland_blur.rs
 +++ b/src/wayland_blur.rs
-@@ -1,6 +1,7 @@
+@@ -1,6 +1,10 @@
  use std::cell::RefCell;
++use std::env;
++use std::fs;
++use std::path::PathBuf;
  use std::rc::Rc;
  
 +use crate::config::get_config;
  use gdk4_wayland::prelude::WaylandSurfaceExtManual;
  use gdk4_wayland::{WaylandDisplay, WaylandSurface};
  use gtk4::prelude::*;
-@@ -65,18 +66,39 @@ struct BlurContext {
+@@ -65,18 +69,40 @@ struct BlurContext {
      compositor: WlCompositor,
      bg_effect: ExtBackgroundEffectSurfaceV1,
      last_rect: Option<(i32, i32, i32, i32)>,
++    radius: i32,
 +    last_radius: i32,
  }
  
  impl BlurContext {
--    fn update_region(&mut self, rect: (i32, i32, i32, i32)) {
+     fn update_region(&mut self, rect: (i32, i32, i32, i32)) {
 -        if self.last_rect == Some(rect) {
-+    fn update_region(&mut self, rect: (i32, i32, i32, i32), radius: i32) {
-+        if self.last_rect == Some(rect) && self.last_radius == radius {
++        if self.last_rect == Some(rect) && self.last_radius == self.radius {
              return;
          }
          self.last_rect = Some(rect);
-+        self.last_radius = radius;
++        self.last_radius = self.radius;
  
          let region = self.compositor.create_region(&self.qh, ());
          let (x, y, w, h) = rect;
 -        region.add(x, y, w.max(0), h.max(0));
 +        let w = w.max(0);
 +        let h = h.max(0);
-+        let r = radius.clamp(0, w / 2).clamp(0, h / 2);
++        let r = self.radius.clamp(0, w / 2).clamp(0, h / 2);
 +
 +        if r <= 0 {
 +            region.add(x, y, w, h);
@@ -96,32 +150,53 @@ index 360b188..eb975e9 100644
          self.bg_effect.set_blur_region(Some(&region));
          region.destroy();
  
-@@ -112,12 +134,15 @@ pub fn attach_blur(window: &Window, target: &GtkBox) {
-                     if let Some(c) = ctx.borrow_mut().as_mut()
-                         && let Some(bounds) = target.compute_bounds(&window)
-                     {
--                        c.update_region((
--                            bounds.x() as i32,
--                            bounds.y() as i32,
--                            bounds.width() as i32,
--                            bounds.height() as i32,
--                        ));
-+                        c.update_region(
-+                            (
-+                                bounds.x() as i32,
-+                                bounds.y() as i32,
-+                                bounds.width() as i32,
-+                                bounds.height() as i32,
-+                            ),
-+                            get_config().blur_corner_radius,
-+                        );
-                     }
-                 });
-             }
-@@ -183,5 +208,6 @@ fn init_context(window: &Window) -> Result<BlurContext, String> {
+@@ -84,6 +110,33 @@ impl BlurContext {
+     }
+ }
+ 
++fn read_theme_border_radius() -> Option<i32> {
++    let theme = &get_config().theme;
++    let home = env::var("HOME").ok()?;
++    let path = PathBuf::from(&home)
++        .join(".config/walker/themes")
++        .join(theme)
++        .join("style.css");
++    let css = fs::read_to_string(path).ok()?;
++    parse_border_radius(&css)
++}
++
++fn parse_border_radius(css: &str) -> Option<i32> {
++    let start = css.find(".box-wrapper")?;
++    let brace = css[start..].find('{')? + start;
++    let close = css[brace + 1..].find('}')? + brace + 1;
++    let block = &css[brace..close];
++    let br = block.find("border-radius")?;
++    let after = &block[br + "border-radius".len()..];
++    let colon = after.find(':')?;
++    let value: String = after[colon + 1..]
++        .chars()
++        .skip_while(|c| c.is_whitespace())
++        .take_while(|c| c.is_ascii_digit())
++        .collect();
++    value.parse::<i32>().ok()
++}
++
+ impl Drop for BlurContext {
+     fn drop(&mut self) {
+         self.bg_effect.destroy();
+@@ -177,11 +230,15 @@ fn init_context(window: &Window) -> Result<BlurContext, String> {
+ 
+     let _ = connection.flush();
+ 
++    let radius = read_theme_border_radius().unwrap_or_else(|| get_config().blur_corner_radius);
++
+     Ok(BlurContext {
+         queue,
+         qh,
          compositor,
          bg_effect,
          last_rect: None,
++        radius,
 +        last_radius: 0,
      })
  }
