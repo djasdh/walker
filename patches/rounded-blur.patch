@@ -50,14 +50,14 @@ diff --git a/patches/rounded-blur.patch b/patches/rounded-blur.patch
 new file mode 100644
 index 0000000..e69de29
 diff --git a/resources/config.toml b/resources/config.toml
-index 2166592..ccedf0e 100644
+index 2166592..a29d973 100644
 --- a/resources/config.toml
 +++ b/resources/config.toml
 @@ -19,6 +19,7 @@ resume_last_query = false          # open walker with the last query in place
  actions_as_menu = false            # display all possible actions in a submenu
  autoplay_videos = false            # auto-play video previews
  ext_background_effect_blur = false # request the compositor to blur behind the box-wrapper via ext-background-effect-v1 (compositor must support it)
-+blur_corner_radius = 12            # corner radius of the blur region (only used when ext_background_effect_blur is true)
++blur_corner_radius = 20            # corner radius of the blur region (only used when ext_background_effect_blur is true)
  
  [shell]
  exclusive_zone = -1
@@ -93,21 +93,18 @@ index d7cacf7..a00d55d 100644
              self.providers.merge(p);
          }
 diff --git a/src/wayland_blur.rs b/src/wayland_blur.rs
-index 360b188..8dc75f4 100644
+index 360b188..4d54acc 100644
 --- a/src/wayland_blur.rs
 +++ b/src/wayland_blur.rs
-@@ -1,6 +1,10 @@
+@@ -1,6 +1,7 @@
  use std::cell::RefCell;
-+use std::env;
-+use std::fs;
-+use std::path::PathBuf;
  use std::rc::Rc;
  
 +use crate::config::get_config;
  use gdk4_wayland::prelude::WaylandSurfaceExtManual;
  use gdk4_wayland::{WaylandDisplay, WaylandSurface};
  use gtk4::prelude::*;
-@@ -65,18 +69,40 @@ struct BlurContext {
+@@ -65,18 +66,40 @@ struct BlurContext {
      compositor: WlCompositor,
      bg_effect: ExtBackgroundEffectSurfaceV1,
      last_rect: Option<(i32, i32, i32, i32)>,
@@ -150,45 +147,11 @@ index 360b188..8dc75f4 100644
          self.bg_effect.set_blur_region(Some(&region));
          region.destroy();
  
-@@ -84,6 +110,33 @@ impl BlurContext {
-     }
- }
- 
-+fn read_theme_border_radius() -> Option<i32> {
-+    let theme = &get_config().theme;
-+    let home = env::var("HOME").ok()?;
-+    let path = PathBuf::from(&home)
-+        .join(".config/walker/themes")
-+        .join(theme)
-+        .join("style.css");
-+    let css = fs::read_to_string(path).ok()?;
-+    parse_border_radius(&css)
-+}
-+
-+fn parse_border_radius(css: &str) -> Option<i32> {
-+    let start = css.find(".box-wrapper")?;
-+    let brace = css[start..].find('{')? + start;
-+    let close = css[brace + 1..].find('}')? + brace + 1;
-+    let block = &css[brace..close];
-+    let br = block.find("border-radius")?;
-+    let after = &block[br + "border-radius".len()..];
-+    let colon = after.find(':')?;
-+    let value: String = after[colon + 1..]
-+        .chars()
-+        .skip_while(|c| c.is_whitespace())
-+        .take_while(|c| c.is_ascii_digit())
-+        .collect();
-+    value.parse::<i32>().ok()
-+}
-+
- impl Drop for BlurContext {
-     fn drop(&mut self) {
-         self.bg_effect.destroy();
-@@ -177,11 +230,15 @@ fn init_context(window: &Window) -> Result<BlurContext, String> {
+@@ -177,11 +200,15 @@ fn init_context(window: &Window) -> Result<BlurContext, String> {
  
      let _ = connection.flush();
  
-+    let radius = read_theme_border_radius().unwrap_or_else(|| get_config().blur_corner_radius);
++    let radius = get_config().blur_corner_radius;
 +
      Ok(BlurContext {
          queue,

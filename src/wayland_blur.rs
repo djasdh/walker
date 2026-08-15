@@ -1,7 +1,4 @@
 use std::cell::RefCell;
-use std::env;
-use std::fs;
-use std::path::PathBuf;
 use std::rc::Rc;
 
 use crate::config::get_config;
@@ -110,33 +107,6 @@ impl BlurContext {
     }
 }
 
-fn read_theme_border_radius() -> Option<i32> {
-    let theme = &get_config().theme;
-    let home = env::var("HOME").ok()?;
-    let path = PathBuf::from(&home)
-        .join(".config/walker/themes")
-        .join(theme)
-        .join("style.css");
-    let css = fs::read_to_string(path).ok()?;
-    parse_border_radius(&css)
-}
-
-fn parse_border_radius(css: &str) -> Option<i32> {
-    let start = css.find(".box-wrapper")?;
-    let brace = css[start..].find('{')? + start;
-    let close = css[brace + 1..].find('}')? + brace + 1;
-    let block = &css[brace..close];
-    let br = block.find("border-radius")?;
-    let after = &block[br + "border-radius".len()..];
-    let colon = after.find(':')?;
-    let value: String = after[colon + 1..]
-        .chars()
-        .skip_while(|c| c.is_whitespace())
-        .take_while(|c| c.is_ascii_digit())
-        .collect();
-    value.parse::<i32>().ok()
-}
-
 impl Drop for BlurContext {
     fn drop(&mut self) {
         self.bg_effect.destroy();
@@ -230,7 +200,7 @@ fn init_context(window: &Window) -> Result<BlurContext, String> {
 
     let _ = connection.flush();
 
-    let radius = read_theme_border_radius().unwrap_or_else(|| get_config().blur_corner_radius);
+    let radius = get_config().blur_corner_radius;
 
     Ok(BlurContext {
         queue,
