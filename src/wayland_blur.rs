@@ -87,11 +87,11 @@ impl BlurContext {
         if r <= 0 {
             region.add(x, y, w, h);
         } else {
-            let step = 2;
+            let step = 1;
             let mut yy = 0;
             while yy < r {
                 let d = r - yy;
-                let inset = r - f64::from(r * r - d * d).sqrt() as i32;
+                let inset = (r as f64 - f64::from(r * r - d * d).sqrt()).round() as i32;
                 let inner_w = (w - 2 * inset).max(0);
                 region.add(x + inset, y + yy, inner_w, step);
                 region.add(x + inset, y + h - yy - step, inner_w, step);
